@@ -18,6 +18,9 @@ on:
 
 env:
   AZURE_WEBAPP_NAME: mlops-group29-heart-disease-api
+  RESOURCE_GROUP: mlops-group29-rg
+  APP_SERVICE_PLAN: mlops-group29-plan
+  LOCATION: eastus
   PYTHON_VERSION: '3.10'
 
 jobs:
@@ -27,6 +30,16 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
+    
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+    
+    - name: Set up Azure CLI
+      run: |
+        az --version
+        az account show
     
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -59,6 +72,56 @@ jobs:
           ls -lh models/
         fi
     
+    - name: Create Azure Resource Group
+      run: |
+        if az group show --name ${{ env.RESOURCE_GROUP }} --output none 2>/dev/null; then
+          echo "Resource group already exists"
+        else
+          echo "Creating resource group..."
+          az group create --name ${{ env.RESOURCE_GROUP }} --location ${{ env.LOCATION }}
+        fi
+    
+    - name: Create App Service Plan
+      run: |
+        if az appservice plan show --name ${{ env.APP_SERVICE_PLAN }} --resource-group ${{ env.RESOURCE_GROUP }} --output none 2>/dev/null; then
+          echo "App Service Plan already exists"
+        else
+          echo "Creating App Service Plan..."
+          az appservice plan create \
+            --name ${{ env.APP_SERVICE_PLAN }} \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --sku B1 \
+            --is-linux
+        fi
+    
+    - name: Create Web App
+      run: |
+        if az webapp show --name ${{ env.AZURE_WEBAPP_NAME }} --resource-group ${{ env.RESOURCE_GROUP }} --output none 2>/dev/null; then
+          echo "Web App already exists"
+        else
+          echo "Creating Web App..."
+          az webapp create \
+            --resource-group ${{ env.RESOURCE_GROUP }} \
+            --plan ${{ env.APP_SERVICE_PLAN }} \
+            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --runtime "PYTHON|3.10"
+        fi
+    
+    - name: Configure Web App
+      run: |
+        echo "Configuring Web App..."
+        az webapp config set \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --name ${{ env.AZURE_WEBAPP_NAME }} \
+          --startup-file "gunicorn app:app --bind 0.0.0.0:8000 --workers 4 --worker-class uvicorn.workers.UvicornWorker" \
+          --output none
+        
+        az webapp config appsettings set \
+          --resource-group ${{ env.RESOURCE_GROUP }} \
+          --name ${{ env.AZURE_WEBAPP_NAME }} \
+          --settings MODEL_TYPE=logreg PORT=8000 WEBSITES_PORT=8000 \
+          --output none
+    
     - name: Create deployment package
       run: |
         # Create a deployment package excluding unnecessary files
@@ -84,7 +147,6 @@ jobs:
       uses: azure/webapps-deploy@v2
       with:
         app-name: ${{ env.AZURE_WEBAPP_NAME }}
-        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
         package: ./deploy.zip
     
     - name: Verify deployment
